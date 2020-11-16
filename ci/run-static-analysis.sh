@@ -5,7 +5,7 @@
 
 . ${0%/*}/lib.sh
 
-make --jobs=2 coccicheck
+make coccicheck
 
 set +x
 
@@ -25,5 +25,8 @@ then
 	echo "$(tput setaf 1)error: Coccinelle suggested some changes$(tput sgr0)"
 	exit 1
 fi
+
+make hdr-check ||
+exit 1
 
 save_good_tree

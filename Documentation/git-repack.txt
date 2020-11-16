@@ -142,7 +142,7 @@ depth is 4095.
 
 --keep-pack=<pack-name>::
 	Exclude the given pack from repacking. This is the equivalent
-	of having `.keep` file on the pack. `<pack-name>` is the the
+	of having `.keep` file on the pack. `<pack-name>` is the
 	pack file name without leading directory (e.g. `pack-123.pack`).
 	The option could be specified multiple times to keep multiple
 	packs.
@@ -159,6 +159,11 @@ depth is 4095.
 	packs will be appended to the end of the packfile instead of
 	being removed. In addition, any unreachable loose objects will
 	be packed (and their loose counterparts removed).
+
+-i::
+--delta-islands::
+	Pass the `--delta-islands` option to `git-pack-objects`, see
+	linkgit:git-pack-objects[1].
 
 Configuration
 -------------

@@ -38,6 +38,26 @@ do
 		test_name="${TEST_EXIT%.exit}"
 		test_name="${test_name##*/}"
 		trash_dir="trash directory.$test_name"
+		case "$CI_TYPE" in
+		travis)
+			;;
+		azure-pipelines)
+			mkdir -p failed-test-artifacts
+			mv "$trash_dir" failed-test-artifacts
+			continue
+			;;
+		github-actions)
+			mkdir -p failed-test-artifacts
+			echo "::set-env name=FAILED_TEST_ARTIFACTS::t/failed-test-artifacts"
+			cp "${TEST_EXIT%.exit}.out" failed-test-artifacts/
+			tar czf failed-test-artifacts/"$test_name".trash.tar.gz "$trash_dir"
+			continue
+			;;
+		*)
+			echo "Unhandled CI type: $CI_TYPE" >&2
+			exit 1
+			;;
+		esac
 		trash_tgz_b64="trash.$test_name.base64"
 		if [ -d "$trash_dir" ]
 		then
@@ -69,7 +89,7 @@ do
 	fi
 done
 
-if [ -n "$TRAVIS_JOB_ID" -a $combined_trash_size -gt 0 ]
+if [ $combined_trash_size -gt 0 ]
 then
 	echo "------------------------------------------------------------------------"
 	echo "Trash directories embedded in this log can be extracted by running:"

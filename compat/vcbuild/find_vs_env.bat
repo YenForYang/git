@@ -18,7 +18,7 @@ REM and MAKE, we must blend these two different worlds.  This script
 REM attempts to do that.
 REM ================================================================
 REM This BAT file starts in a plain (non-developer) command prompt,
-REM searches for the "best" commmand prompt setup script, installs
+REM searches for the "best" command prompt setup script, installs
 REM it into the current CMD process, and exports the various MSVC
 REM environment variables for use by MAKE.
 REM
@@ -53,7 +53,7 @@ REM Visual Studio 2015 uses the traditional VcVarsAll.
 REM
 REM Earlier Versions
 REM ----------------
-REM TODO
+REM Currently unsupported.
 REM
 REM ================================================================
 REM Note: Throughout this script we use "dir <path> && <cmd>" rather
@@ -142,8 +142,7 @@ REM ================================================================
 REM ================================================================
 
 :not_2015
-   REM TODO....
-   echo TODO support older versions of VS. >&2
+   echo "ERROR: unsupported VS version (older than VS2015)" >&2
    EXIT /B 1
 
 REM ================================================================

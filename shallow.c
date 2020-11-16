@@ -8,14 +8,13 @@
 #include "pkt-line.h"
 #include "remote.h"
 #include "refs.h"
-#include "sha1-array.h"
+#include "oid-array.h"
 #include "diff.h"
 #include "revision.h"
 #include "commit-slab.h"
-#include "revision.h"
 #include "list-objects.h"
-#include "commit-slab.h"
-#include "repository.h"
+#include "commit-reach.h"
+#include "shallow.h"
 
 void set_alternate_shallow_file(struct repository *r, const char *path, int override)
 {
@@ -38,6 +37,19 @@ int register_shallow(struct repository *r, const struct object_id *oid)
 	if (commit && commit->object.parsed)
 		commit->parents = NULL;
 	return register_commit_graft(r, graft, 0);
+}
+
+int unregister_shallow(const struct object_id *oid)
+{
+	int pos = commit_graft_pos(the_repository, oid->hash);
+	if (pos < 0)
+		return -1;
+	if (pos + 1 < the_repository->parsed_objects->grafts_nr)
+		MOVE_ARRAY(the_repository->parsed_objects->grafts + pos,
+			   the_repository->parsed_objects->grafts + pos + 1,
+			   the_repository->parsed_objects->grafts_nr - pos - 1);
+	the_repository->parsed_objects->grafts_nr--;
+	return 0;
 }
 
 int is_repository_shallow(struct repository *r)
@@ -74,11 +86,34 @@ int is_repository_shallow(struct repository *r)
 	return r->parsed_objects->is_shallow;
 }
 
+static void reset_repository_shallow(struct repository *r)
+{
+	r->parsed_objects->is_shallow = -1;
+	stat_validity_clear(r->parsed_objects->shallow_stat);
+}
+
+int commit_shallow_file(struct repository *r, struct shallow_lock *lk)
+{
+	int res = commit_lock_file(&lk->lock);
+	reset_repository_shallow(r);
+	return res;
+}
+
+void rollback_shallow_file(struct repository *r, struct shallow_lock *lk)
+{
+	rollback_lock_file(&lk->lock);
+	reset_repository_shallow(r);
+}
+
 /*
  * TODO: use "int" elemtype instead of "int *" when/if commit-slab
  * supports a "valid" flag.
  */
 define_commit_slab(commit_depth, int *);
+static void free_depth_in_slab(int **ptr)
+{
+	FREE_AND_NULL(*ptr);
+}
 struct commit_list *get_shallow_commits(struct object_array *heads, int depth,
 		int shallow_flag, int not_shallow_flag)
 {
@@ -145,13 +180,7 @@ struct commit_list *get_shallow_commits(struct object_array *heads, int depth,
 			}
 		}
 	}
-	for (i = 0; i < depths.slab_count; i++) {
-		int j;
-
-		for (j = 0; j < depths.slab_size; j++)
-			free(depths.slab[i][j]);
-	}
-	clear_commit_depth(&depths);
+	deep_clear_commit_depth(&depths, free_depth_in_slab);
 
 	return result;
 }
@@ -184,7 +213,7 @@ struct commit_list *get_shallow_commits_by_rev_list(int ac, const char **av,
 
 	is_repository_shallow(the_repository); /* make sure shallows are read */
 
-	init_revisions(&revs, NULL);
+	repo_init_revisions(the_repository, &revs, NULL);
 	save_commit_buffer = 0;
 	setup_revisions(ac, av, &revs, NULL);
 
@@ -240,12 +269,14 @@ static void check_shallow_file_for_update(struct repository *r)
 	if (r->parsed_objects->is_shallow == -1)
 		BUG("shallow must be initialized by now");
 
-	if (!stat_validity_check(r->parsed_objects->shallow_stat, git_path_shallow(the_repository)))
+	if (!stat_validity_check(r->parsed_objects->shallow_stat,
+				 git_path_shallow(r)))
 		die("shallow file has changed since we read it");
 }
 
 #define SEEN_ONLY 1
 #define VERBOSE   2
+#define QUICK 4
 
 struct write_shallow_data {
 	struct strbuf *out;
@@ -260,7 +291,10 @@ static int write_one_shallow(const struct commit_graft *graft, void *cb_data)
 	const char *hex = oid_to_hex(&graft->oid);
 	if (graft->nr_parent != -1)
 		return 0;
-	if (data->flags & SEEN_ONLY) {
+	if (data->flags & QUICK) {
+		if (!has_object_file(&graft->oid))
+			return 0;
+	} else if (data->flags & SEEN_ONLY) {
 		struct commit *c = lookup_commit(the_repository, &graft->oid);
 		if (!c || !(c->object.flags & SEEN)) {
 			if (data->flags & VERBOSE)
@@ -328,22 +362,22 @@ const char *setup_temporary_shallow(const struct oid_array *extra)
 	return "";
 }
 
-void setup_alternate_shallow(struct lock_file *shallow_lock,
+void setup_alternate_shallow(struct shallow_lock *shallow_lock,
 			     const char **alternate_shallow_file,
 			     const struct oid_array *extra)
 {
 	struct strbuf sb = STRBUF_INIT;
 	int fd;
 
-	fd = hold_lock_file_for_update(shallow_lock,
+	fd = hold_lock_file_for_update(&shallow_lock->lock,
 				       git_path_shallow(the_repository),
 				       LOCK_DIE_ON_ERROR);
 	check_shallow_file_for_update(the_repository);
 	if (write_shallow_commits(&sb, 0, extra)) {
 		if (write_in_full(fd, sb.buf, sb.len) < 0)
 			die_errno("failed to write to %s",
-				  get_lock_file_path(shallow_lock));
-		*alternate_shallow_file = get_lock_file_path(shallow_lock);
+				  get_lock_file_path(&shallow_lock->lock));
+		*alternate_shallow_file = get_lock_file_path(&shallow_lock->lock);
 	} else
 		/*
 		 * is_repository_shallow() sees empty string as "no
@@ -370,31 +404,38 @@ void advertise_shallow_grafts(int fd)
 
 /*
  * mark_reachable_objects() should have been run prior to this and all
- * reachable commits marked as "SEEN".
+ * reachable commits marked as "SEEN", except when quick_prune is non-zero,
+ * in which case lines are excised from the shallow file if they refer to
+ * commits that do not exist (any longer).
  */
-void prune_shallow(int show_only)
+void prune_shallow(unsigned options)
 {
-	struct lock_file shallow_lock = LOCK_INIT;
+	struct shallow_lock shallow_lock = SHALLOW_LOCK_INIT;
 	struct strbuf sb = STRBUF_INIT;
+	unsigned flags = SEEN_ONLY;
 	int fd;
 
-	if (show_only) {
-		write_shallow_commits_1(&sb, 0, NULL, SEEN_ONLY | VERBOSE);
+	if (options & PRUNE_QUICK)
+		flags |= QUICK;
+
+	if (options & PRUNE_SHOW_ONLY) {
+		flags |= VERBOSE;
+		write_shallow_commits_1(&sb, 0, NULL, flags);
 		strbuf_release(&sb);
 		return;
 	}
-	fd = hold_lock_file_for_update(&shallow_lock,
+	fd = hold_lock_file_for_update(&shallow_lock.lock,
 				       git_path_shallow(the_repository),
 				       LOCK_DIE_ON_ERROR);
 	check_shallow_file_for_update(the_repository);
-	if (write_shallow_commits_1(&sb, 0, NULL, SEEN_ONLY)) {
+	if (write_shallow_commits_1(&sb, 0, NULL, flags)) {
 		if (write_in_full(fd, sb.buf, sb.len) < 0)
 			die_errno("failed to write to %s",
-				  get_lock_file_path(&shallow_lock));
-		commit_lock_file(&shallow_lock);
+				  get_lock_file_path(&shallow_lock.lock));
+		commit_shallow_file(the_repository, &shallow_lock);
 	} else {
 		unlink(git_path_shallow(the_repository));
-		rollback_lock_file(&shallow_lock);
+		rollback_shallow_file(the_repository, &shallow_lock);
 	}
 	strbuf_release(&sb);
 }

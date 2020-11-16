@@ -21,9 +21,10 @@ generate_expected_cache_tree_rec () {
 	parent="$2" &&
 	# ls-files might have foo/bar, foo/bar/baz, and foo/bar/quux
 	# We want to count only foo because it's the only direct child
-	subtrees=$(git ls-files|grep /|cut -d / -f 1|uniq) &&
+	git ls-files >files &&
+	subtrees=$(grep / files|cut -d / -f 1|uniq) &&
 	subtree_count=$(echo "$subtrees"|awk -v c=0 '$1 != "" {++c} END {print c}') &&
-	entries=$(git ls-files|wc -l) &&
+	entries=$(wc -l <files) &&
 	printf "SHA $dir (%d entries, %d subtrees)\n" "$entries" "$subtree_count" &&
 	for subtree in $subtrees
 	do
@@ -161,6 +162,24 @@ test_expect_success PERL 'commit --interactive gives cache-tree on partial commi
 	test_cache_tree
 '
 
+test_expect_success PERL 'commit -p with shrinking cache-tree' '
+	mkdir -p deep/very-long-subdir &&
+	echo content >deep/very-long-subdir/file &&
+	git add deep &&
+	git commit -m add &&
+	git rm -r deep &&
+
+	before=$(wc -c <.git/index) &&
+	git commit -m delete -p &&
+	after=$(wc -c <.git/index) &&
+
+	# double check that the index shrank
+	test $before -gt $after &&
+
+	# and that our index was not corrupted
+	git fsck
+'
+
 test_expect_success 'commit in child dir has cache-tree' '
 	mkdir dir &&
 	>dir/child.t &&
@@ -243,13 +262,16 @@ test_expect_success 'no phantom error when switching trees' '
 '
 
 test_expect_success 'switching trees does not invalidate shared index' '
-	git update-index --split-index &&
-	>split &&
-	git add split &&
-	test-tool dump-split-index .git/index | grep -v ^own >before &&
-	git commit -m "as-is" &&
-	test-tool dump-split-index .git/index | grep -v ^own >after &&
-	test_cmp before after
+	(
+		sane_unset GIT_TEST_SPLIT_INDEX &&
+		git update-index --split-index &&
+		>split &&
+		git add split &&
+		test-tool dump-split-index .git/index | grep -v ^own >before &&
+		git commit -m "as-is" &&
+		test-tool dump-split-index .git/index | grep -v ^own >after &&
+		test_cmp before after
+	)
 '
 
 test_done

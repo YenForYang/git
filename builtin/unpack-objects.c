@@ -24,6 +24,7 @@ static off_t consumed_bytes;
 static off_t max_input_size;
 static git_hash_ctx ctx;
 static struct fsck_options fsck_options = FSCK_OPTIONS_STRICT;
+static struct progress *progress;
 
 /*
  * When running under --strict mode, objects whose reachability are
@@ -92,6 +93,7 @@ static void use(int bytes)
 	consumed_bytes += bytes;
 	if (max_input_size && consumed_bytes > max_input_size)
 		die(_("pack exceeds maximum allowed size"));
+	display_throughput(progress, consumed_bytes);
 }
 
 static void *get_data(unsigned long size)
@@ -263,7 +265,8 @@ static void write_object(unsigned nr, enum object_type type,
 	} else {
 		struct object *obj;
 		int eaten;
-		hash_object_file(buf, size, type_name(type), &obj_list[nr].oid);
+		hash_object_file(the_hash_algo, buf, size, type_name(type),
+				 &obj_list[nr].oid);
 		added_object(nr, type, buf, size);
 		obj = parse_object_buffer(the_repository, &obj_list[nr].oid,
 					  type, size, buf,
@@ -303,7 +306,7 @@ static void added_object(unsigned nr, enum object_type type,
 	struct delta_info *info;
 
 	while ((info = *p) != NULL) {
-		if (!oidcmp(&info->base_oid, &obj_list[nr].oid) ||
+		if (oideq(&info->base_oid, &obj_list[nr].oid) ||
 		    info->base_offset == obj_list[nr].offset) {
 			*p = info->next;
 			p = &delta_list;
@@ -332,7 +335,7 @@ static int resolve_against_held(unsigned nr, const struct object_id *base,
 {
 	struct object *obj;
 	struct obj_buffer *obj_buffer;
-	obj = lookup_object(the_repository, base->hash);
+	obj = lookup_object(the_repository, base);
 	if (!obj)
 		return 0;
 	obj_buffer = lookup_object_buffer(obj);
@@ -484,7 +487,6 @@ static void unpack_one(unsigned nr)
 static void unpack_all(void)
 {
 	int i;
-	struct progress *progress = NULL;
 	struct pack_header *hdr = fill(sizeof(struct pack_header));
 
 	nr_objects = ntohl(hdr->hdr_entries);
@@ -579,7 +581,7 @@ int cmd_unpack_objects(int argc, const char **argv, const char *prefix)
 		if (fsck_finish(&fsck_options))
 			die(_("fsck error in pack objects"));
 	}
-	if (hashcmp(fill(the_hash_algo->rawsz), oid.hash))
+	if (!hasheq(fill(the_hash_algo->rawsz), oid.hash))
 		die("final sha1 did not match");
 	use(the_hash_algo->rawsz);
 

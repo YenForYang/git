@@ -40,14 +40,15 @@ struct fetch_pack_args {
 	unsigned cloning:1;
 	unsigned update_shallow:1;
 	unsigned deepen:1;
-	unsigned from_promisor:1;
 
 	/*
-	 * If 1, fetch_pack() will also not modify any object flags.
-	 * This allows fetch_pack() to safely be called by any function,
-	 * regardless of which object flags it uses (if any).
+	 * Indicate that the remote of this request is a promisor remote. The
+	 * pack received does not need all referred-to objects to be present in
+	 * the local object store, and fetch-pack will store the pack received
+	 * together with a ".promisor" file indicating that the aforementioned
+	 * pack is a promisor pack.
 	 */
-	unsigned no_dependents:1;
+	unsigned from_promisor:1;
 
 	/*
 	 * Because fetch_pack() overwrites the shallow file upon a
@@ -71,13 +72,12 @@ struct fetch_pack_args {
  * marked as such.
  */
 struct ref *fetch_pack(struct fetch_pack_args *args,
-		       int fd[], struct child_process *conn,
+		       int fd[],
 		       const struct ref *ref,
-		       const char *dest,
 		       struct ref **sought,
 		       int nr_sought,
 		       struct oid_array *shallow,
-		       char **pack_lockfile,
+		       struct string_list *pack_lockfiles,
 		       enum protocol_version version);
 
 /*

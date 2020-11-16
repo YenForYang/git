@@ -165,6 +165,15 @@ test_expect_success 'absolute path rejects the empty string' '
 	test_must_fail test-tool path-utils absolute_path ""
 '
 
+test_expect_success MINGW '<drive-letter>:\\abc is an absolute path' '
+	for letter in : \" C Z 1 ä
+	do
+		path=$letter:\\abc &&
+		absolute="$(test-tool path-utils absolute_path "$path")" &&
+		test "$path" = "$absolute" || return 1
+	done
+'
+
 test_expect_success 'real path rejects the empty string' '
 	test_must_fail test-tool path-utils real_path ""
 '
@@ -285,9 +294,13 @@ test_git_path GIT_OBJECT_DIRECTORY=foo objects/foo foo/foo
 test_git_path GIT_OBJECT_DIRECTORY=foo objects2 .git/objects2
 test_expect_success 'setup common repository' 'git --git-dir=bar init'
 test_git_path GIT_COMMON_DIR=bar index                    .git/index
+test_git_path GIT_COMMON_DIR=bar index.lock               .git/index.lock
 test_git_path GIT_COMMON_DIR=bar HEAD                     .git/HEAD
 test_git_path GIT_COMMON_DIR=bar logs/HEAD                .git/logs/HEAD
+test_git_path GIT_COMMON_DIR=bar logs/HEAD.lock           .git/logs/HEAD.lock
 test_git_path GIT_COMMON_DIR=bar logs/refs/bisect/foo     .git/logs/refs/bisect/foo
+test_git_path GIT_COMMON_DIR=bar logs/refs                bar/logs/refs
+test_git_path GIT_COMMON_DIR=bar logs/refs/               bar/logs/refs/
 test_git_path GIT_COMMON_DIR=bar logs/refs/bisec/foo      bar/logs/refs/bisec/foo
 test_git_path GIT_COMMON_DIR=bar logs/refs/bisec          bar/logs/refs/bisec
 test_git_path GIT_COMMON_DIR=bar logs/refs/bisectfoo      bar/logs/refs/bisectfoo
@@ -306,6 +319,8 @@ test_git_path GIT_COMMON_DIR=bar hooks/me                 bar/hooks/me
 test_git_path GIT_COMMON_DIR=bar config                   bar/config
 test_git_path GIT_COMMON_DIR=bar packed-refs              bar/packed-refs
 test_git_path GIT_COMMON_DIR=bar shallow                  bar/shallow
+test_git_path GIT_COMMON_DIR=bar common                   bar/common
+test_git_path GIT_COMMON_DIR=bar common/file              bar/common/file
 
 # In the tests below, $(pwd) must be used because it is a native path on
 # Windows and avoids MSYS's path mangling (which simplifies "foo/../bar" and
@@ -421,6 +436,9 @@ test_expect_success 'match .gitmodules' '
 		~1000000 \
 		~9999999 \
 		\
+		.gitmodules:\$DATA \
+		"gitmod~4 . :\$DATA" \
+		\
 		--not \
 		".gitmodules x"  \
 		".gitmodules .x" \
@@ -445,7 +463,74 @@ test_expect_success 'match .gitmodules' '
 		\
 		GI7EB~1 \
 		GI7EB~01 \
-		GI7EB~1X
+		GI7EB~1X \
+		\
+		.gitmodules,:\$DATA
+'
+
+test_expect_success MINGW 'is_valid_path() on Windows' '
+	test-tool path-utils is_valid_path \
+		win32 \
+		"win32 x" \
+		../hello.txt \
+		C:\\git \
+		comm \
+		conout.c \
+		com0.c \
+		lptN \
+		\
+		--not \
+		"win32 "  \
+		"win32 /x "  \
+		"win32."  \
+		"win32 . ." \
+		.../hello.txt \
+		colon:test \
+		"AUX.c" \
+		"abc/conOut\$  .xyz/test" \
+		lpt8 \
+		com9.c \
+		"lpt*" \
+		Nul \
+		"PRN./abc"
+'
+
+test_expect_success MINGW 'MSYSTEM/PATH is adjusted if necessary' '
+	mkdir -p "$HOME"/bin pretend/mingw64/bin \
+		pretend/mingw64/libexec/git-core pretend/usr/bin &&
+	cp "$GIT_EXEC_PATH"/git.exe pretend/mingw64/bin/ &&
+	cp "$GIT_EXEC_PATH"/git.exe pretend/mingw64/libexec/git-core/ &&
+	echo "env | grep MSYSTEM=" | write_script "$HOME"/bin/git-test-home &&
+	echo "echo mingw64" | write_script pretend/mingw64/bin/git-test-bin &&
+	echo "echo usr" | write_script pretend/usr/bin/git-test-bin2 &&
+
+	(
+		MSYSTEM= &&
+		GIT_EXEC_PATH= &&
+		pretend/mingw64/libexec/git-core/git.exe test-home >actual &&
+		pretend/mingw64/libexec/git-core/git.exe test-bin >>actual &&
+		pretend/mingw64/bin/git.exe test-bin2 >>actual
+	) &&
+	test_write_lines MSYSTEM=$MSYSTEM mingw64 usr >expect &&
+	test_cmp expect actual
+'
+
+test_lazy_prereq RUNTIME_PREFIX '
+	test true = "$RUNTIME_PREFIX"
+'
+
+test_lazy_prereq CAN_EXEC_IN_PWD '
+	cp "$GIT_EXEC_PATH"/git$X ./ &&
+	./git rev-parse
+'
+
+test_expect_success RUNTIME_PREFIX,CAN_EXEC_IN_PWD 'RUNTIME_PREFIX works' '
+	mkdir -p pretend/git pretend/libexec/git-core &&
+	echo "echo HERE" | write_script pretend/libexec/git-core/git-here &&
+	cp "$GIT_EXEC_PATH"/git$X pretend/git/ &&
+	GIT_EXEC_PATH= ./pretend/git/git here >actual &&
+	echo HERE >expect &&
+	test_cmp expect actual
 '
 
 test_done

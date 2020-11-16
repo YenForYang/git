@@ -9,18 +9,18 @@ git-config - Get and set repository or global options
 SYNOPSIS
 --------
 [verse]
-'git config' [<file-option>] [--type=<type>] [--show-origin] [-z|--null] name [value [value_regex]]
+'git config' [<file-option>] [--type=<type>] [--show-origin] [--show-scope] [-z|--null] name [value [value_regex]]
 'git config' [<file-option>] [--type=<type>] --add name value
 'git config' [<file-option>] [--type=<type>] --replace-all name value [value_regex]
-'git config' [<file-option>] [--type=<type>] [--show-origin] [-z|--null] --get name [value_regex]
-'git config' [<file-option>] [--type=<type>] [--show-origin] [-z|--null] --get-all name [value_regex]
-'git config' [<file-option>] [--type=<type>] [--show-origin] [-z|--null] [--name-only] --get-regexp name_regex [value_regex]
+'git config' [<file-option>] [--type=<type>] [--show-origin] [--show-scope] [-z|--null] --get name [value_regex]
+'git config' [<file-option>] [--type=<type>] [--show-origin] [--show-scope] [-z|--null] --get-all name [value_regex]
+'git config' [<file-option>] [--type=<type>] [--show-origin] [--show-scope] [-z|--null] [--name-only] --get-regexp name_regex [value_regex]
 'git config' [<file-option>] [--type=<type>] [-z|--null] --get-urlmatch name URL
 'git config' [<file-option>] --unset name [value_regex]
 'git config' [<file-option>] --unset-all name [value_regex]
 'git config' [<file-option>] --rename-section old_name new_name
 'git config' [<file-option>] --remove-section name
-'git config' [<file-option>] [--show-origin] [-z|--null] [--name-only] -l | --list
+'git config' [<file-option>] [--show-origin] [--show-scope] [-z|--null] [--name-only] -l | --list
 'git config' [<file-option>] --get-color name [default]
 'git config' [<file-option>] --get-colorbool name [stdout-is-tty]
 'git config' [<file-option>] -e | --edit
@@ -45,13 +45,15 @@ unset an existing `--type` specifier with `--no-type`.
 
 When reading, the values are read from the system, global and
 repository local configuration files by default, and options
-`--system`, `--global`, `--local` and `--file <filename>` can be
-used to tell the command to read from only that location (see <<FILES>>).
+`--system`, `--global`, `--local`, `--worktree` and
+`--file <filename>` can be used to tell the command to read from only
+that location (see <<FILES>>).
 
 When writing, the new value is written to the repository local
 configuration file by default, and options `--system`, `--global`,
-`--file <filename>` can be used to tell the command to write to
-that location (you can say `--local` but that is the default).
+`--worktree`, `--file <filename>` can be used to tell the command to
+write to that location (you can say `--local` but that is the
+default).
 
 This command will fail with non-zero status upon error.  Some exit
 codes are:
@@ -124,12 +126,17 @@ See also <<FILES>>.
 
 --local::
 	For writing options: write to the repository `.git/config` file.
-	This is	the default behavior.
+	This is the default behavior.
 +
 For reading options: read only from the repository `.git/config` rather than
 from all available files.
 +
 See also <<FILES>>.
+
+--worktree::
+	Similar to `--local` except that `.git/config.worktree` is
+	read from or written to if `extensions.worktreeConfig` is
+	present. If not it's the same as `--local`.
 
 -f config-file::
 --file config-file::
@@ -188,8 +195,8 @@ Valid `<type>`'s include:
 --bool-or-int::
 --path::
 --expiry-date::
-  Historical options for selecting a type specifier. Prefer instead `--type`,
-  (see: above).
+  Historical options for selecting a type specifier. Prefer instead `--type`
+  (see above).
 
 --no-type::
   Un-sets the previously set type specifier (if one was previously set). This
@@ -215,6 +222,11 @@ Valid `<type>`'s include:
 	the actual origin (config file path, ref, or blob id if
 	applicable).
 
+--show-scope::
+	Similar to `--show-origin` in that it augments the output of
+	all queried config options with the scope of that value
+	(local, global, system, command).
+
 --get-colorbool name [stdout-is-tty]::
 
 	Find the color setting for `name` (e.g. `color.diff`) and output
@@ -233,7 +245,9 @@ Valid `<type>`'s include:
 	output.  The optional `default` parameter is used instead, if
 	there is no color configured for `name`.
 +
-`--type=color [--default=<default>]` is preferred over `--get-color`.
+`--type=color [--default=<default>]` is preferred over `--get-color`
+(but note that `--get-color` will omit the trailing newline printed by
+`--type=color`).
 
 -e::
 --edit::
@@ -263,16 +277,8 @@ FILES
 If not set explicitly with `--file`, there are four files where
 'git config' will search for configuration options:
 
-$PROGRAMDATA/Git/config::
-	(Windows-only) System-wide configuration file shared with other Git
-	implementations. Typically `$PROGRAMDATA` points to `C:\ProgramData`.
-
 $(prefix)/etc/gitconfig::
 	System-wide configuration file.
-	(Windows-only) This file contains only the settings which are
-	specific for this installation of Git for Windows and which should
-	not be shared with other Git implementations like JGit, libgit2.
-	`--system` will select this file.
 
 $XDG_CONFIG_HOME/git/config::
 	Second user-specific configuration file. If $XDG_CONFIG_HOME is not set
@@ -288,6 +294,10 @@ $XDG_CONFIG_HOME/git/config::
 
 $GIT_DIR/config::
 	Repository specific configuration file.
+
+$GIT_DIR/config.worktree::
+	This is optional and is only searched when
+	`extensions.worktreeConfig` is present in $GIT_DIR/config.
 
 If no further options are given, all reading options will read all of these
 files that are available. If the global or the system-wide configuration
@@ -307,9 +317,10 @@ configuration file. Note that this also affects options like `--replace-all`
 and `--unset`. *'git config' will only ever change one file at a time*.
 
 You can override these rules either by command-line options or by environment
-variables. The `--global` and the `--system` options will limit the file used
-to the global or system-wide file respectively. The `GIT_CONFIG` environment
-variable has a similar effect, but you can specify any filename you want.
+variables. The `--global`, `--system` and `--worktree` options will limit
+the file used to the global, system-wide or per-worktree file respectively.
+The `GIT_CONFIG` environment variable has a similar effect, but you
+can specify any filename you want.
 
 
 ENVIRONMENT
@@ -333,33 +344,35 @@ EXAMPLES
 
 Given a .git/config like this:
 
-	#
-	# This is the config file, and
-	# a '#' or ';' character indicates
-	# a comment
-	#
+------------
+#
+# This is the config file, and
+# a '#' or ';' character indicates
+# a comment
+#
 
-	; core variables
-	[core]
-		; Don't trust file modes
-		filemode = false
+; core variables
+[core]
+	; Don't trust file modes
+	filemode = false
 
-	; Our diff algorithm
-	[diff]
-		external = /usr/local/bin/diff-wrapper
-		renames = true
+; Our diff algorithm
+[diff]
+	external = /usr/local/bin/diff-wrapper
+	renames = true
 
-	; Proxy settings
-	[core]
-		gitproxy=proxy-command for kernel.org
-		gitproxy=default-proxy ; for all the rest
+; Proxy settings
+[core]
+	gitproxy=proxy-command for kernel.org
+	gitproxy=default-proxy ; for all the rest
 
-	; HTTP
-	[http]
-		sslVerify
-	[http "https://weak.example.com"]
-		sslVerify = false
-		cookieFile = /tmp/cookie.txt
+; HTTP
+[http]
+	sslVerify
+[http "https://weak.example.com"]
+	sslVerify = false
+	cookieFile = /tmp/cookie.txt
+------------
 
 you can set the filemode to true with
 
@@ -450,9 +463,9 @@ For URLs in `https://weak.example.com`, `http.sslVerify` is set to
 false, while it is set to `true` for all others:
 
 ------------
-% git config --bool --get-urlmatch http.sslverify https://good.example.com
+% git config --type=bool --get-urlmatch http.sslverify https://good.example.com
 true
-% git config --bool --get-urlmatch http.sslverify https://weak.example.com
+% git config --type=bool --get-urlmatch http.sslverify https://weak.example.com
 false
 % git config --get-urlmatch http https://weak.example.com
 http.cookieFile /tmp/cookie.txt
